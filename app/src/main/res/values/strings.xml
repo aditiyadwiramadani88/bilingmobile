@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Billing Apps</string>
+    <string name="accessibility_service_description">FocusGuard memerlukan izin ini untuk memantau aplikasi yang sedang berjalan dan memblokirnya sesuai dengan pengaturan Anda.</string>
+</resources>
