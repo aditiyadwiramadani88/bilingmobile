@@ -2,9 +2,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools" >
 
-    <!-- IZIN BARU YANG DITAMBAHKAN -->
-    <uses-permission android:name="android.permission.PROCESS_OUTGOING_CALLS" />
-
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -13,6 +10,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
 
     <application
@@ -66,14 +66,15 @@
             android:exported="false"
             android:label="Select Apps"
             android:theme="@style/Theme.BillingApps" />
+
         <activity
             android:name=".BlockScreenActivity"
             android:excludeFromRecents="true"
-            android:exported="false"
-            android:label="App Blocked"
-            android:hardwareAccelerated="true"
-            android:launchMode="singleTop"
-            android:theme="@style/Theme.BillingApps" />
+            android:taskAffinity=""
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.AppCompat.Light.NoActionBar"
+            android:exported="false" />
+
         <service
             android:name=".services.background.DeviceStatusPollingService"
             android:enabled="true"
@@ -90,11 +91,24 @@
             android:excludeFromRecents="true"
             android:taskAffinity=""
             android:launchMode="singleTask" />
+
         <service
             android:name=".services.background.LocationUpdateService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="location" />
+        <service
+            android:name=".services.background.AppSyncService"
+            android:enabled="true"
+            android:exported="false"
+             />
+
+        <service
+            android:name=".services.FocusGuardUsageStatsService"
+            android:exported="false"
+          />
+
+
         <service
             android:name=".services.FocusGuardAccessibilityService"
             android:exported="false"
@@ -103,13 +117,10 @@
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>
             <meta-data
-                android:name="android.accessibilityservice"
+                android:name="android.accessibility service"
                 android:resource="@xml/accessibility_service_config" />
         </service>
-        <service
-            android:name=".services.background.StatusService"
-            android:enabled="true"
-            android:exported="false" />
+
         <activity
             android:name=".UnlockActivity"
             android:exported="false"
@@ -121,6 +132,14 @@
             android:label="Unlock Screen"
             android:theme="@style/Theme.BillingApps" />
 
+        <receiver
+            android:name=".receiver.StartServicesOnBootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
     </application>
 

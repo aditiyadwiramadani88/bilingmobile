@@ -18,7 +18,9 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
@@ -39,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.billingapps.api.RetrofitClient
 import com.example.billingapps.api.apps.AppInfoResponse
 import com.example.billingapps.api.apps.AppsRetrofitClient
@@ -47,9 +50,11 @@ import com.example.billingapps.api.apps.BulkInsertAppsRequest
 import com.example.billingapps.services.*
 import com.example.billingapps.services.background.FrameCaptureService
 import com.example.billingapps.services.background.LocationUpdateService
-import com.example.billingapps.services.background.StatusService
 import com.example.billingapps.ui.theme.BillingAppsTheme
 import kotlinx.coroutines.launch
+import com.example.billingapps.services.FocusGuardUsageStatsService
+import com.example.billingapps.services.background.AppSyncService
+import com.example.billingapps.services.background.DeviceStatusPollingService
 
 class HomeActivity : ComponentActivity() {
 
@@ -69,8 +74,24 @@ class HomeActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         setupPusherService()
-        // --- PERUBAHAN 2: Panggil pengecekan izin di onCreate ---
         checkAndRequestLocationPermissions()
+
+        try {
+            val focusIntent = Intent(this, FocusGuardUsageStatsService::class.java)
+            ContextCompat.startForegroundService(this, focusIntent)
+
+            val pollingIntent = Intent(this, DeviceStatusPollingService::class.java)
+            ContextCompat.startForegroundService(this, pollingIntent)
+            val appSyncIntent = Intent(this, AppSyncService::class.java)
+            ContextCompat.startForegroundService(this, appSyncIntent)
+
+            Log.d("HomeActivity", "Service utama dijalankan.")
+        } catch (e: SecurityException) {
+
+            Log.d("HomeActivity", "Semua service utama dijalankan.")
+        } catch (e: Exception) {
+            Log.e("HomeActivity", "Gagal menjalankan service: ${e.message}")
+        }
 
         setContent {
             BillingAppsTheme {
@@ -109,12 +130,6 @@ class HomeActivity : ComponentActivity() {
                 apply()
             }
             Log.d("HomeActivity", "Broadcast token ensured in SharedPreferences.")
-            val statusIntent = Intent(this, StatusService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(statusIntent)
-            } else {
-                startService(statusIntent)
-            }
         } else {
             Log.w("HomeActivity", "Device ID not found. Services will not start.")
         }
@@ -144,8 +159,11 @@ fun FocusGuardScreen() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("BillingAppPrefs", Context.MODE_PRIVATE) }
+    val deviceId = remember { prefs.getString("deviceId", "Not Found") ?: "Not Found" }
+
 
     var isAccessibilityEnabled by remember { mutableStateOf(checkAccessibilityServiceEnabled(context)) }
+    var hasUsageStats by remember { mutableStateOf(hasUsageStatsPermission(context)) }
     var blockedAppsCount by remember { mutableStateOf(0) }
     var whitelistedAppsCount by remember { mutableStateOf(0) }
     var isLocked by remember { mutableStateOf<Boolean?>(null) }
@@ -189,29 +207,47 @@ fun FocusGuardScreen() {
         reloadCountsFromStorage()
     }
 
-    DisposableEffect(Unit) {
-        val activity = context as ComponentActivity
-        val lifecycleObserver = LifecycleEventObserver { _, event ->
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 isAccessibilityEnabled = checkAccessibilityServiceEnabled(context)
+                hasUsageStats = hasUsageStatsPermission(context)
                 reloadCountsFromStorage()
                 fetchLockStatus()
-                // Refresh status screen capture saat kembali ke activity
                 isCaptureRunning = prefs.getBoolean(ScreenCaptureActivity.PREF_KEY_IS_CAPTURE_RUNNING, false)
+
+                if (hasUsageStats && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                    try {
+                        val serviceIntent = Intent(context, FocusGuardUsageStatsService::class.java)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                            context.startForegroundService(serviceIntent)
+                        else
+                            context.startService(serviceIntent)
+                    } catch (e: Exception) {
+                        Log.e("FocusGuard", "Failed to start service: ${e.message}")
+                    }
+                }
             }
         }
-        activity.lifecycle.addObserver(lifecycleObserver)
+        lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
-            activity.lifecycle.removeObserver(lifecycleObserver)
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFFF0F2F5))
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFFF0F2F5))
-                .padding(24.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 100.dp) // Tambah padding bawah
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -220,6 +256,8 @@ fun FocusGuardScreen() {
             ) {
                 Column {
                     Text(text = "TimeBill", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                    // --- PENAMBAHAN: MENAMPILKAN DEVICE ID ---
+                    Text(text = "Device ID: $deviceId", fontSize = 12.sp, color = Color.Gray)
                     Text(text = "Mode: active", fontSize = 16.sp, color = Color.Gray)
                 }
                 Button(
@@ -229,9 +267,13 @@ fun FocusGuardScreen() {
                             val success = syncInstalledApps(context)
                             if (success) {
                                 reloadCountsFromStorage()
-                                Toast.makeText(context, "Sync successful!", Toast.LENGTH_SHORT).show()
+                                Toast
+                                    .makeText(context, "Sync successful!", Toast.LENGTH_SHORT)
+                                    .show()
                             } else {
-                                Toast.makeText(context, "Sync failed. Check logs.", Toast.LENGTH_LONG).show()
+                                Toast
+                                    .makeText(context, "Sync failed. Check logs.", Toast.LENGTH_LONG)
+                                    .show()
                             }
                             isSyncing = false
                         }
@@ -258,6 +300,11 @@ fun FocusGuardScreen() {
             AccessibilityStatus(
                 isEnabled = isAccessibilityEnabled,
                 onActivateClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            UsageStatsStatus(
+                isEnabled = hasUsageStats,
+                onActivateClick = { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }
             )
             Spacer(modifier = Modifier.height(16.dp))
             OptionCard(
@@ -298,8 +345,37 @@ fun FocusGuardScreen() {
                     iconColor = Color(0xFFE74C3C)
                 )
             }
-            // ----------------------------------------------------
-            Spacer(modifier = Modifier.weight(1f))
+            // --- PEMINDAHAN TOMBOL LOGOUT ---
+            Spacer(modifier = Modifier.height(16.dp))
+            OutlinedButton(
+                onClick = {
+                    val sharedPreferences = context.getSharedPreferences("BillingAppPrefs", Context.MODE_PRIVATE)
+                    with(sharedPreferences.edit()) {
+                        clear() // Menghapus semua data, termasuk deviceId
+                        apply()
+                    }
+
+                    // Arahkan kembali ke PinActivity dan bersihkan stack
+                    val intent = Intent(context, PinActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                    }
+                    context.startActivity(intent)
+                },
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, Color.Red),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Logout", color = Color.Red)
+            }
+        }
+        // --- Lock Status Display sebagai elemen tetap di bawah ---
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(Color(0xFFF0F2F5))
+                .padding(horizontal = 24.dp, vertical = 16.dp)
+        ) {
             LockStatusDisplay(isLocked = isLocked, isLoading = isLoadingLockStatus)
         }
     }
@@ -337,6 +413,7 @@ private fun stopScreenCapture(context: Context) {
         apply()
     }
 }
+
 
 
 private suspend fun getDeviceLockStatus(context: Context): Boolean? {
@@ -421,7 +498,9 @@ fun LockStatusDisplay(isLocked: Boolean?, isLoading: Boolean) {
         border = BorderStroke(1.dp, Color(0xFFEDEDF4))
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -501,6 +580,41 @@ fun AccessibilityStatus(isEnabled: Boolean, onActivateClick: () -> Unit) {
     }
 }
 
+@Composable
+fun UsageStatsStatus(isEnabled: Boolean, onActivateClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = if (isEnabled) Color(0xFFE6F9F0) else Color(0xFFFFF4E5))
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Status Akses Data Penggunaan",
+                    fontWeight = FontWeight.Bold,
+                    color = Color.Black
+                )
+                Text(
+                    text = if (isEnabled) "Active" else "Tidak Active",
+                    color = if (isEnabled) Color(0xFF00875A) else Color(0xFFE67E22)
+                )
+            }
+            if (!isEnabled) {
+                Button(
+                    onClick = onActivateClick,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6A5AE0))
+                ) {
+                    Text("Aktifkan")
+                }
+            }
+        }
+    }
+}
+
 fun checkAccessibilityServiceEnabled(context: Context): Boolean {
     val service = "${context.packageName}/${FocusGuardAccessibilityService::class.java.canonicalName}"
     val settingValue = Settings.Secure.getString(
@@ -508,4 +622,19 @@ fun checkAccessibilityServiceEnabled(context: Context): Boolean {
         Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
     )
     return settingValue?.contains(service) ?: false
+}
+
+fun hasUsageStatsPermission(context: Context): Boolean {
+    try {
+        val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager
+        val mode = appOps.checkOpNoThrow(
+            "android:get_usage_stats",
+            android.os.Process.myUid(),
+            context.packageName
+        )
+        return mode == android.app.AppOpsManager.MODE_ALLOWED
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+    return false
 }

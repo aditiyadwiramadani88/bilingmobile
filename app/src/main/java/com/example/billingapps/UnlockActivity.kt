@@ -1,5 +1,4 @@
 package com.example.billingapps
-
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Bundle
@@ -26,9 +25,8 @@ class UnlockActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val sharedPreferences: SharedPreferences = getSharedPreferences("AppPrefs", Context.MODE_PRIVATE)
+        val sharedPreferences: SharedPreferences = getSharedPreferences("BillingAppPrefs", Context.MODE_PRIVATE)
         val deviceId = sharedPreferences.getString("deviceId", "indonesia") ?: "indonesia"
-
         setContent {
             BillingAppsTheme {
                 UnlockScreen(

@@ -31,7 +31,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
-// --- PERUBAHAN IMPORT ---
 import com.example.billingapps.api.apps.AppInfoResponse
 import com.example.billingapps.api.apps.AppsRetrofitClient
 import com.example.billingapps.api.apps.BulkUpdateAppItem
@@ -74,16 +73,14 @@ fun WhitelistAppsScreen(onBackPressed: () -> Unit) {
 
     LaunchedEffect(Unit) {
         isLoading = true
-        // Asumsi InternalStorageManager mengembalikan List<AppInfoResponse> dari package .api.apps
         val appsFromStorage = InternalStorageManager.getApps(context)
         appState = appsFromStorage.map {
             SelectableWhitelistApp(
                 appName = it.appName,
                 packageName = it.packageName,
-                // --- PERBAIKAN: Konversi Int ke Boolean ---
                 isWhitelisted = it.isWhitelist == 1
             )
-        }.sortedBy { it.appName.lowercase() }
+        }.sortedWith(compareByDescending<SelectableWhitelistApp> { it.isWhitelisted }.thenBy { it.appName.lowercase() }) // DIUBAH DI SINI
         isLoading = false
     }
 
@@ -257,18 +254,15 @@ private suspend fun saveWhitelistedApps(context: Context, appState: List<Selecta
     }
 
     try {
-        // --- PERBAIKAN: Sesuaikan payload dengan model baru ---
         val itemsToUpdate = appState.map {
             BulkUpdateAppItem(
-                appName = it.appName, // appName sekarang wajib diisi
+                appName = it.appName,
                 packageName = it.packageName,
                 statusBlock = null, // Kirim null agar tidak mengubah status block
-                isWhitelist = it.isWhitelisted
+                isWhitelist = if (it.isWhitelisted) true else false
             )
         }
         val request = BulkUpdateAppsRequest(apps = itemsToUpdate)
-
-        // --- PERBAIKAN: Gunakan AppsRetrofitClient ---
         val updateResponse = AppsRetrofitClient.instance.bulkUpdateApps(deviceId, request)
 
         if (!updateResponse.isSuccessful) {
@@ -276,7 +270,6 @@ private suspend fun saveWhitelistedApps(context: Context, appState: List<Selecta
             return false
         }
 
-        // --- PERBAIKAN: Gunakan AppsRetrofitClient ---
         val allAppsResponse = AppsRetrofitClient.instance.getAllAppsByDevice(deviceId)
         if (!allAppsResponse.isSuccessful) {
             Log.e("SaveWhitelistApps", "Failed to fetch all apps after update: ${allAppsResponse.errorBody()?.string()}")
@@ -292,4 +285,3 @@ private suspend fun saveWhitelistedApps(context: Context, appState: List<Selecta
         return false
     }
 }
-

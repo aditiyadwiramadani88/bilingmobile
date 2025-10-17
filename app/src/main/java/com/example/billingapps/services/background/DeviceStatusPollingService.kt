@@ -30,7 +30,7 @@ class DeviceStatusPollingService : Service() {
 
     companion object {
         const val TAG = "DeviceStatusPolling"
-        private const val POLLING_INTERVAL_MS = 5 * 1000L // 30 detik
+        private const val POLLING_INTERVAL_MS = 3 * 1000L // 3 detik
         private const val NOTIFICATION_ID = 1
         private const val NOTIFICATION_CHANNEL_ID = "DeviceStatusPollingChannel"
     }
@@ -70,13 +70,15 @@ class DeviceStatusPollingService : Service() {
 
         try {
             val apiService = RetrofitClient.instance
+
+            // --- Panggilan API Pertama: getDeviceStatus ---
             val response = apiService.getDeviceStatus(deviceId)
 
             if (response.isSuccessful) {
                 val deviceStatusResponse = response.body()
                 val isLockedFromServer = deviceStatusResponse?.data?.isLocked
                 if (isLockedFromServer != null) {
-                    Log.i(TAG, "✅ API call successful. Server is_locked status: $isLockedFromServer")
+                    Log.i(TAG, "✅ API call [getDeviceStatus] successful. Server is_locked status: $isLockedFromServer")
                     BlockedAppsManager.saveServerLockStatus(applicationContext, isLockedFromServer)
                 } else {
                     Log.w(TAG, "is_locked status is null in response.")
@@ -89,12 +91,20 @@ class DeviceStatusPollingService : Service() {
                 } else {
                     Log.d(TAG, "No pending ads found.")
                 }
-
             } else {
-                Log.e(TAG, "API call failed with code: ${response.code()} and message: ${response.message()}")
+                Log.e(TAG, "API call [getDeviceStatus] failed with code: ${response.code()} and message: ${response.message()}")
             }
+
+            // --- Panggilan API Kedua (Digabung): sendStatus ---
+            val sendStatusResponse = apiService.sendStatus(deviceId)
+            if (sendStatusResponse.isSuccessful) {
+                Log.i(TAG, "✅ API call [sendStatus] successful.")
+            } else {
+                Log.e(TAG, "API call [sendStatus] failed with code: ${sendStatusResponse.code()} and message: ${sendStatusResponse.message()}")
+            }
+
         } catch (e: Exception) {
-            Log.e(TAG, "❌ An exception occurred during API call", e)
+            Log.e(TAG, "❌ An exception occurred during API calls", e)
         }
     }
 
@@ -117,7 +127,6 @@ class DeviceStatusPollingService : Service() {
             val channel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
                 "Device Status Service",
-                // --- UBAH KE IMPORTANCE_MIN ---
                 NotificationManager.IMPORTANCE_MIN
             )
             channel.description = "Channel for silent device status polling."
@@ -129,7 +138,6 @@ class DeviceStatusPollingService : Service() {
             .setContentTitle("Billing Apps")
             .setContentText("Checking device status.")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            // --- UBAH KE PRIORITY_MIN ---
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .build()
     }

@@ -9,6 +9,7 @@ import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import com.example.billingapps.BlockScreenActivity
+import com.example.billingapps.services.background.AppSyncService
 import com.example.billingapps.services.background.DeviceStatusPollingService
 import com.example.billingapps.services.background.LocationUpdateService
 
@@ -17,7 +18,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     // --- Penambahan untuk Pengecekan Realtime ---
     private val handler = Handler(Looper.getMainLooper())
     private var currentForegroundAppPackage: String? = null
-    private val CHECK_INTERVAL_MS = 20 * 1000L // 20 detik
+    private val CHECK_INTERVAL_MS = 5 * 1000L // 20 detik
 
     private val periodicCheckRunnable = object : Runnable {
         override fun run() {
@@ -97,6 +98,15 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         } else {
             startService(locationIntent)
         }
+
+        Log.d("FocusGuardService", "Starting LocationUpdateService...")
+        val appIntent = Intent(this, AppSyncService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(appIntent)
+        } else {
+            startService(appIntent)
+        }
+
     }
 
     override fun onUnbind(intent: Intent?): Boolean {

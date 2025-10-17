@@ -82,7 +82,7 @@ fun LockingAppsScreen(onBackPressed: () -> Unit) {
                 packageName = it.packageName,
                 isBlocked = it.statusBlock.equals("active", ignoreCase = true)
             )
-        }.sortedBy { it.appName.lowercase() }
+        }.sortedWith(compareByDescending<SelectableApp> { it.isBlocked }.thenBy { it.appName.lowercase() }) // DIUBAH DI SINI
         isLoading = false
     }
 

@@ -8,10 +8,10 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -28,10 +28,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.lifecycleScope
-import coil3.compose.rememberAsyncImagePainter
+import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.example.billingapps.api.RetrofitClient
@@ -74,19 +72,20 @@ class AdActivity : ComponentActivity() {
             return
         }
 
-        // Update status menjadi "displayed" saat activity dibuat
         updateAdStatus("displayed")
 
-        // Jadwalkan update status menjadi "expired" sesuai durasi
         handler.postDelayed({
             expireAdAndFinish()
         }, adDuration * 1000L)
 
 
+        // --- PERUBAHAN UTAMA ---
+        // Menghapus Box pembungkus dan langsung memanggil composable fullscreen.
+        // Activity kini akan langsung menampilkan konten iklan secara penuh.
         setContent {
             BillingAppsTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = Color.Black.copy(alpha = 0.6f)) {
-                    AdDialog(
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    FullScreenAdContent(
                         adName = adName,
                         adType = adType,
                         adContent = adContent,
@@ -127,7 +126,7 @@ class AdActivity : ComponentActivity() {
         if (!hasBeenExpired) {
             hasBeenExpired = true
             updateAdStatus("expired")
-            handler.removeCallbacksAndMessages(null) // Hapus callback lain jika ada
+            handler.removeCallbacksAndMessages(null)
             finish()
         }
     }
@@ -135,112 +134,107 @@ class AdActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // Pastikan semua callback handler dihapus untuk menghindari memory leak
         handler.removeCallbacksAndMessages(null)
     }
 }
 
+// Perubahan: Composable `AdContentCard` diubah menjadi `FullScreenAdContent`.
+// Composable ini sekarang menggunakan `Box` yang mengisi seluruh layar.
 @Composable
-fun AdDialog(
+fun FullScreenAdContent(
     adName: String,
     adType: String,
     adContent: String,
     onDismiss: () -> Unit
 ) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black) // Background default jika media gagal dimuat
     ) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth(0.9f)
-                .wrapContentHeight(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = Color.White)
-        ) {
-            Column(modifier = Modifier.padding(24.dp)) {
-                // Header (Judul Iklan & Tombol Close)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(text = adName, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.Gray)
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Close Ad",
-                        modifier = Modifier
-                            .size(24.dp)
-                            .clickable { onDismiss() }
-                    )
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Konten Iklan
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .defaultMinSize(minHeight = 200.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    when (adType) {
-                        "image" -> AdImageContent(contentUrl = adContent)
-                        "video" -> AdVideoContent(videoUrl = adContent)
-                        "text" -> AdTextContent(text = adContent)
-                        else -> Text("Tipe konten tidak didukung: $adType")
-                    }
-                }
+        // Konten Iklan (disesuaikan untuk memenuhi seluruh layar)
+        when (adType) {
+            "image" -> AdImageContent(contentUrl = adContent)
+            "video" -> AdVideoContent(videoUrl = adContent)
+            "text" -> AdTextContent(text = adContent)
+            else -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("Tipe konten tidak didukung: $adType", color = Color.White)
             }
         }
+
+        // Tombol Close (selalu di atas, di pojok kanan atas)
+        Icon(
+            imageVector = Icons.Default.Close,
+            contentDescription = "Close Ad",
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(16.dp)
+                .size(32.dp)
+                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                .clip(CircleShape)
+                .clickable { onDismiss() }
+                .padding(4.dp),
+            tint = Color.White
+        )
     }
 }
 
 @Composable
 fun AdTextContent(text: String) {
-    Text(
-        text = text,
-        fontSize = 22.sp,
-        fontWeight = FontWeight.Bold,
-        textAlign = TextAlign.Center,
-        lineHeight = 30.sp
-    )
+    // Box untuk menengahkan teks di seluruh layar
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            lineHeight = 36.sp,
+            color = Color.White // Warna teks diubah agar kontras dengan background hitam
+        )
+    }
 }
 
+// Perubahan: `AdImageContent` diubah untuk mengisi seluruh layar.
 @Composable
 fun AdImageContent(contentUrl: String) {
     val fullUrl = buildFullMediaUrl(contentUrl)
-    val painter = rememberAsyncImagePainter(
+
+    AsyncImage(
         model = ImageRequest.Builder(LocalContext.current)
             .data(fullUrl)
             .crossfade(true)
-            .build()
-    )
-    Image(
-        painter = painter,
+            .build(),
         contentDescription = "Ad Image",
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(max = 400.dp)
-            .clip(RoundedCornerShape(12.dp)),
-        contentScale = ContentScale.Fit
+        modifier = Modifier.fillMaxSize(), // Mengisi seluruh layar
+        contentScale = ContentScale.Crop // Crop gambar agar pas, menjaga aspek rasio
     )
 }
 
+
+// Perubahan: `AdVideoContent` diubah untuk mengisi seluruh layar.
 @Composable
 fun AdVideoContent(videoUrl: String) {
     val isYouTubeUrl = videoUrl.contains("youtube.com") || videoUrl.contains("youtu.be")
     if (isYouTubeUrl) {
-        YoutubePlayerWebView(videoUrl = videoUrl, modifier = Modifier.fillMaxWidth().height(250.dp).clip(RoundedCornerShape(12.dp)))
+        YoutubePlayerWebView(videoUrl = videoUrl, modifier = Modifier.fillMaxSize()) // Mengisi seluruh layar
     } else {
-        // Placeholder untuk video direct, bisa diimplementasikan dengan ExoPlayer jika perlu
-        Box(modifier = Modifier.fillMaxWidth().height(250.dp).background(Color.Black, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center){
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black), contentAlignment = Alignment.Center
+        ) {
             Text("Direct video player not implemented yet.", color = Color.White)
         }
     }
 }
 
 
-// --- Helper Functions (diambil dari BlockScreenActivity) ---
+// --- Helper Functions ---
 private fun buildFullMediaUrl(path: String?): String? {
     val baseUrl = MyApp.BE_URL
     if (path.isNullOrEmpty()) {
@@ -252,6 +246,8 @@ private fun buildFullMediaUrl(path: String?): String? {
         baseUrl.trimEnd('/') + "/" + path.trimStart('/')
     }
 }
+
+
 
 
 @Composable
@@ -272,16 +268,15 @@ private fun YoutubePlayerWebView(videoUrl: String, modifier: Modifier = Modifier
                 settings.useWideViewPort = true
                 webViewClient = WebViewClient()
                 val html = """
-                    <!DOCTYPE html><html><head>
-                    <style>body{margin:0;padding:0;overflow:hidden;background-color:black;}iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0;}</style>
-                    </head><body>
-                    <iframe src="https://www.youtube.com/embed/$videoId?autoplay=1&controls=0&showinfo=0&rel=0" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>
-                    </body></html>
-                """.trimIndent()
+                        <!DOCTYPE html><html><head>
+                        <style>body{margin:0;padding:0;overflow:hidden;background-color:black;}iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0;}</style>
+                        </head><body>
+                        <iframe src="https://www.youtube.com/embed/$videoId?autoplay=1&controls=0&showinfo=0&rel=0" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+                        </body></html>
+                    """.trimIndent()
                 loadData(html, "text/html", "utf-8")
             }
         }
     )
 }
-
 

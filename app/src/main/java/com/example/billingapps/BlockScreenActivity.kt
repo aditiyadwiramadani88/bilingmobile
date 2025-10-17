@@ -1,9 +1,14 @@
 package com.example.billingapps
 
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -11,6 +16,7 @@ import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -99,7 +105,36 @@ class BlockScreenActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        Log.d("BlockScreenActivity", "User menekan Home/Recent Apps → moveTaskToBack + finish")
+        moveTaskToBack(true)
+        finishAndRemoveTask()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus) {
+            Log.d("BlockScreenActivity", "Kehilangan fokus (Recent Apps). Tutup dengan delay.")
+            Handler(Looper.getMainLooper()).postDelayed({
+                finishAndRemoveTask()
+            }, 300)
+        }
+    }
+
+    private val closeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            Log.d("BlockScreenActivity", "Broadcast → finishAndRemoveTask()")
+            Handler(Looper.getMainLooper()).post {
+                finishAndRemoveTask()
+            }
+        }
+    }
+
 }
+
+
 
 @Composable
 fun LockScreen(viewModel: LockScreenViewModel) {
