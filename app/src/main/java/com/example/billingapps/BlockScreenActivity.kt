@@ -25,8 +25,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -47,19 +49,21 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.request.crossfade
-import com.example.billingapps.api.BlockContent
 import com.example.billingapps.api.DeviceDetails
+import com.example.billingapps.api.LockscreenDesign
 import com.example.billingapps.api.RetrofitClient
 import com.example.billingapps.ui.theme.BillingAppsTheme
 import kotlinx.coroutines.launch
 import java.util.regex.Pattern
+import androidx.activity.OnBackPressedCallback
 
-// --- Pastikan IP ini SAMA DENGAN IP KOMPUTER ANDA SAAT INI ---
-private val LOCAL_SERVER_BASE_URL = MyApp.BE_URL.replace("/", "")
+
+private val LOCAL_SERVER_BASE_URL = MyApp.BE_URL.trimEnd('/')
 
 // --- ViewModel (Tidak ada perubahan) ---
 class LockScreenViewModel : ViewModel() {
@@ -77,6 +81,7 @@ class LockScreenViewModel : ViewModel() {
                 val response = RetrofitClient.instance.getDeviceStatus(deviceId)
                 if (response.isSuccessful) {
                     deviceDetails = response.body()?.data
+                    Log.d("LockScreenViewModel", "Device Details: $deviceDetails")
                 } else {
                     errorMessage = "Gagal memuat data: ${response.code()}"
                 }
@@ -94,7 +99,17 @@ class BlockScreenActivity : ComponentActivity() {
     private val viewModel: LockScreenViewModel by viewModels()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val sharedPreferences: SharedPreferences = getSharedPreferences("AppPrefs", Context.MODE_PRIVATE)
+
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    Log.d("BlockScreenActivity", "Tombol back ditekan, tapi diblokir.")
+                }
+            }
+        )
+
+        val sharedPreferences: SharedPreferences = getSharedPreferences("BillingAppPrefs", Context.MODE_PRIVATE)
         val deviceId = sharedPreferences.getString("deviceId", "indonesia")
         if (deviceId != null) { viewModel.fetchDeviceStatus(deviceId) }
         setContent {
@@ -131,10 +146,7 @@ class BlockScreenActivity : ComponentActivity() {
             }
         }
     }
-
 }
-
-
 
 @Composable
 fun LockScreen(viewModel: LockScreenViewModel) {
@@ -165,53 +177,119 @@ fun LockScreen(viewModel: LockScreenViewModel) {
 }
 
 @Composable
-fun LockScreenContent(design: com.example.billingapps.api.LockscreenDesign) {
-    val context = LocalContext.current // Mendapatkan context
-    val contentBlocks = listOfNotNull(design.blockContent1, design.blockContent2, design.blockContent3)
+fun LockScreenContent(design: LockscreenDesign) {
+    val context = LocalContext.current
+
+    val contentBlocks = listOf(
+        Triple(design.blockContent1SourceType, design.blockContent1Value, design.blockContent1Display),
+        Triple(design.blockContent2SourceType, design.blockContent2Value, design.blockContent2Display),
+        Triple(design.blockContent3SourceType, design.blockContent3Value, design.blockContent3Display)
+    ).filter { !it.first.isNullOrBlank() && (!it.second.isNullOrBlank() || !it.third.isNullOrBlank()) }
+
     Box(modifier = Modifier.fillMaxSize()) {
         val imagePainter = rememberAsyncImagePainter(
             model = ImageRequest.Builder(LocalContext.current)
-                .data(buildFullMediaUrl(design.backgroundImage))
+                .data(buildFullMediaUrl(design.backgroundImageUrl))
                 .crossfade(true)
                 .listener(onError = { _, result ->
                     Log.e("ImageLoader", "Gagal memuat background: ${result.throwable}")
                 })
                 .build(),
             error = ColorPainter(Color.Red.copy(alpha = 0.6f)),
-            fallback = ColorPainter(Color.Gray)
+            fallback = ColorPainter(Color.DarkGray)
         )
         Image(painter = imagePainter, contentDescription = "Background", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-        Column(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 48.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            // --- PERUBAHAN DI SINI: Teks "Take a deep breath" dihapus ---
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                // Spacer untuk memberikan sedikit ruang dari atas layar
-                Spacer(modifier = Modifier.height(32.dp))
-                contentBlocks.forEach { block -> ContentBlock(block = block) }
-            }
 
-            // --- PERUBAHAN DI SINI: Tombol lama diganti dengan komponen baru ---
-            GlassmorphicButton(
-                onClick = {
-                    val intent = Intent(context, UnlockActivity::class.java)
-                    context.startActivity(intent)
+        // --- PERBAIKAN: Menggunakan Box untuk memusatkan konten yang dapat di-scroll ---
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 24.dp, vertical = 48.dp),
+            contentAlignment = Alignment.Center // Memusatkan Column di dalam Box
+        ) {
+            Column(
+                // --- PERBAIKAN: Menambahkan modifier scroll vertikal ---
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(24.dp) // Jarak vertikal yang sama (24.dp) antar semua item
+            ) {
+                val commonBlockModifier = Modifier
+                    .fillMaxWidth()
+                    .height(200.dp)
+                    .clip(RoundedCornerShape(16.dp))
+
+                contentBlocks.forEach { (type, value, display) ->
+                    ContentBlockDynamic(type, value, display, commonBlockModifier)
                 }
-            )
+
+                GlassmorphicButton(
+                    onClick = {
+                        val intent = Intent(context, UnlockActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        }
+                        context.startActivity(intent)
+                    }
+                )
+            }
         }
     }
 }
 
-/**
- * --- TOMBOL BARU ---
- * Composable untuk membuat tombol dengan efek glassmorphism (semi-transparan).
- * Tombol ini memiliki latar belakang buram, border tipis, dan teks yang jelas di atasnya.
- */
+// --- PERUBAHAN: Terima modifier sebagai parameter ---
+@Composable
+fun ContentBlockDynamic(type: String?, value: String?, display: String?, modifier: Modifier = Modifier) {
+    when (type) {
+        // --- PERUBAHAN: Teruskan modifier ke composable yang sesuai ---
+        "text" -> TextBlock(display ?: value, modifier)
+        "video" -> VideoPlayer(value ?: "", modifier)
+        "image" -> SingleImageBlock(value ?: "", modifier)
+        "upload" -> {
+            val mediaPath = if (!display.isNullOrBlank()) display else value
+            when {
+                mediaPath?.endsWith(".jpg", ignoreCase = true) == true ||
+                        mediaPath?.endsWith(".jpeg", ignoreCase = true) == true ||
+                        mediaPath?.endsWith(".png", ignoreCase = true) == true -> {
+                    SingleImageBlock(imageUrl = mediaPath, modifier = modifier)
+                }
+                mediaPath?.endsWith(".mp4", ignoreCase = true) == true ||
+                        mediaPath?.endsWith(".webm", ignoreCase = true) == true -> {
+                    VideoPlayer(videoUrl = mediaPath, modifier = modifier)
+                }
+                else -> if (!display.isNullOrEmpty()) TextBlock(display, modifier)
+            }
+        }
+        "slide_image" -> {
+            if (!display.isNullOrEmpty()) TextBlock(display, modifier)
+            else if (!value.isNullOrEmpty()) SingleImageBlock(value, modifier)
+        }
+        else -> if (!display.isNullOrEmpty()) TextBlock(display, modifier)
+    }
+}
+
+// --- PERUBAHAN: Terima modifier sebagai parameter ---
+@Composable
+fun SingleImageBlock(imageUrl: String, modifier: Modifier = Modifier) {
+    val imagePainter = rememberAsyncImagePainter(
+        model = ImageRequest.Builder(LocalContext.current)
+            .data(buildFullMediaUrl(imageUrl))
+            .crossfade(true)
+            .listener(onError = { _, result ->
+                Log.e("ImageLoader", "Gagal memuat gambar: ${result.throwable}")
+            })
+            .build(),
+        error = ColorPainter(Color.Red.copy(alpha = 0.6f)),
+        fallback = ColorPainter(Color.Gray)
+    )
+    Image(
+        painter = imagePainter,
+        contentDescription = "Image Block",
+        // --- PERUBAHAN: Gunakan modifier yang diteruskan ---
+        modifier = modifier,
+        contentScale = ContentScale.Crop
+    )
+}
+
 @Composable
 fun GlassmorphicButton(
     onClick: () -> Unit,
@@ -219,16 +297,16 @@ fun GlassmorphicButton(
 ) {
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(50)) // Bentuk tombol yang sangat bulat
-            .background(Color.White.copy(alpha = 0.2f)) // Latar belakang semi-transparan
-            .border(width = 1.dp, color = Color.White.copy(alpha = 0.4f), shape = RoundedCornerShape(50)) // Border putih tipis
-            .clickable(onClick = onClick) // Menambahkan aksi klik
-            .padding(horizontal = 48.dp, vertical = 16.dp), // Padding di dalam tombol
+            .clip(RoundedCornerShape(50))
+            .background(Color.White.copy(alpha = 0.2f))
+            .border(width = 1.dp, color = Color.White.copy(alpha = 0.4f), shape = RoundedCornerShape(50))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 48.dp, vertical = 16.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = "UNLOCK",
-            color = Color.White, // Warna teks putih agar kontras
+            color = Color.White,
             fontWeight = FontWeight.Bold,
             fontSize = 18.sp,
             style = MaterialTheme.typography.bodyLarge.copy(
@@ -242,20 +320,22 @@ fun GlassmorphicButton(
     }
 }
 
-
+// --- PERUBAHAN: Terima modifier dan bungkus Text dalam Box ---
 @Composable
-fun ContentBlock(block: BlockContent) {
-    when (block.type) {
-        "slide_image" -> ImageSlider(mediaItems = block.media ?: emptyList())
-        "video" -> VideoPlayer(videoUrl = block.videoUrl)
-        "text" -> TextBlock(text = block.content)
-    }
-}
-
-@Composable
-fun TextBlock(text: String?) {
+fun TextBlock(text: String?, modifier: Modifier = Modifier) {
     if (!text.isNullOrEmpty()) {
-        Text(text = text, fontSize = 20.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(16.dp), color = Color.White)
+        Box(
+            modifier = modifier.background(Color.Black.copy(alpha = 0.4f)), // Latar belakang agar kontras
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = text,
+                fontSize = 20.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(16.dp),
+                color = Color.White
+            )
+        }
     }
 }
 
@@ -293,26 +373,23 @@ fun ImageSlider(mediaItems: List<com.example.billingapps.api.MediaItem>) {
 }
 
 @Composable
-fun VideoPlayer(videoUrl: String?) {
+fun VideoPlayer(videoUrl: String?, modifier: Modifier = Modifier) {
     if (videoUrl.isNullOrEmpty()) return
 
     val isYouTubeUrl = videoUrl.contains("youtube.com") || videoUrl.contains("youtu.be")
 
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(200.dp),
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                if (isYouTubeUrl) {
-                    YoutubePlayerWebView(videoUrl = videoUrl, modifier = Modifier.fillMaxSize())
-                } else {
-                    val fullVideoUrl = buildFullMediaUrl(videoUrl)
-                    if (fullVideoUrl != null) {
-                        DirectVideoPlayer(videoUrl = fullVideoUrl)
-                    }
+    // --- PERBAIKAN: Menghapus Column yang tidak perlu untuk memastikan alignment ---
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Box(modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp))) {
+            if (isYouTubeUrl) {
+                YoutubePlayerWebView(videoUrl = videoUrl, modifier = Modifier.fillMaxSize())
+            } else {
+                val fullVideoUrl = buildFullMediaUrl(videoUrl)
+                if (fullVideoUrl != null) {
+                    DirectVideoPlayer(videoUrl = fullVideoUrl)
                 }
             }
         }
@@ -320,7 +397,7 @@ fun VideoPlayer(videoUrl: String?) {
 }
 
 fun getYouTubeVideoId(youTubeUrl: String): String? {
-    val pattern = "(?<=watch\\?v=|/videos/|embed\\/|youtu.be\\/|\\/v\\/|\\/e\\/|watch\\?v%3D|watch\\?feature=player_embedded&v=|%2Fvideos%2F|embed%\u200C\u200B2F|youtu.be%2F|%2Fv%2F)[^#\\&\\?\\n]*"
+    val pattern = "(?<=watch\\?v=|/videos/|embed\\/|youtu.be\\/|\\/v\\/|\\/e\\/|watch\\?v%3D|watch\\?feature=player_embedded&v=|%2Fvideos%2F|embed%\u200C\u200B2F|youtu.be%2F|%2Fv\\/)[^#\\&\\?\\n]*"
     val compiledPattern = Pattern.compile(pattern)
     val matcher = compiledPattern.matcher(youTubeUrl)
     return if (matcher.find()) { matcher.group() } else { null }
@@ -346,31 +423,32 @@ private fun YoutubePlayerWebView(videoUrl: String, modifier: Modifier = Modifier
                 webViewClient = WebViewClient()
 
                 val html = """
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-                        <style>
-                            body { margin: 0; background-color: #000; }
-                            .video-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
-                            iframe { width: 100%; height: 100%; border: 0; }
-                        </style>
-                    </head>
-                    <body>
-                        <div class="video-container">
-                            <iframe src="https://www.youtube.com/embed/$videoId?autoplay=1&controls=0&showinfo=0&rel=0&loop=1&playlist=$videoId"
-                                    frameborder="0"
-                                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                                    allowfullscreen>
-                            </iframe>
-                        </div>
-                    </body>
-                    </html>
-                """.trimIndent()
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                            <style>
+                                body { margin: 0; background-color: #000; overflow: hidden; }
+                                .video-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+                                iframe { width: 100%; height: 100%; border: 0; }
+                            </style>
+                        </head>
+                        <body>
+                            <div class="video-container">
+                                <iframe src="https://www.youtube.com/embed/$videoId?autoplay=1&controls=0&showinfo=0&rel=0&loop=1&playlist=$videoId"
+                                        frameborder="0"
+                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                        allowfullscreen>
+                                </iframe>
+                            </div>
+                        </body>
+                        </html>
+                    """.trimIndent()
 
                 loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
             }
-        }
+        },
+        modifier = modifier
     )
 }
 
@@ -382,6 +460,7 @@ fun DirectVideoPlayer(videoUrl: String) {
             setMediaItem(MediaItem.fromUri(videoUrl))
             prepare()
             playWhenReady = true // Autoplay
+            repeatMode = ExoPlayer.REPEAT_MODE_ONE // Loop video
         }
     }
 
@@ -390,11 +469,14 @@ fun DirectVideoPlayer(videoUrl: String) {
     }
 
     AndroidView(
-        modifier = Modifier,
+        // --- PERBAIKAN: Modifier diubah untuk mengisi parent ---
+        modifier = Modifier.fillMaxSize(),
         factory = {
             PlayerView(it).apply {
                 player = exoPlayer
-                useController = true
+                useController = false // Sembunyikan kontrol
+                // --- PERBAIKAN: Video di-zoom agar memenuhi container dan terpusat ---
+                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
             }
         }
     )
@@ -405,6 +487,7 @@ private fun buildFullMediaUrl(path: String?): String? {
     return if (path.startsWith("http://") || path.startsWith("https://")) {
         path
     } else {
-        LOCAL_SERVER_BASE_URL + path
+        LOCAL_SERVER_BASE_URL + "/" + path.trimStart('/')
     }
 }
+

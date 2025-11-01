@@ -87,7 +87,6 @@ data class Lokasi(
     val name: String
 )
 
-// 5. Model untuk Desain Lockscreen
 data class LockscreenDesign(
     @SerializedName("id")
     val id: Int,
@@ -95,29 +94,29 @@ data class LockscreenDesign(
     val name: String,
     @SerializedName("background_image")
     val backgroundImage: String?,
-    @SerializedName("block_content1")
-    val blockContent1: BlockContent?,
-    @SerializedName("block_content2")
-    val blockContent2: BlockContent?,
-    @SerializedName("block_content3")
-    val blockContent3: BlockContent?
+    @SerializedName("block_content_1_source_type")
+    val blockContent1SourceType: String?,  // contoh: "text", "video"
+    @SerializedName("block_content_1_value")
+    val blockContent1Value: String?,        // contoh: "Hai"
+    @SerializedName("block_content_2_source_type")
+    val blockContent2SourceType: String?,
+    @SerializedName("block_content_2_value")
+    val blockContent2Value: String?,
+    @SerializedName("block_content_3_source_type")
+    val blockContent3SourceType: String?,
+    @SerializedName("block_content_3_value")
+    val blockContent3Value: String?,
+    @SerializedName("background_image_url")
+    val backgroundImageUrl: String?,
+    @SerializedName("block_content_1_display")
+    val blockContent1Display: String?,
+    @SerializedName("block_content_2_display")
+    val blockContent2Display: String?,
+    @SerializedName("block_content_3_display")
+    val blockContent3Display: String?
 )
 
-// 6. Model untuk Konten Blok (bisa berupa teks, video, atau slide gambar)
-data class BlockContent(
-    @SerializedName("id")
-    val id: Int,
-    @SerializedName("name")
-    val name: String,
-    @SerializedName("type")
-    val type: String, // "video", "text", "slide_image"
-    @SerializedName("content")
-    val content: String?,
-    @SerializedName("video_url")
-    val videoUrl: String?,
-    @SerializedName("media")
-    val media: List<MediaItem>?
-)
+
 
 // 7. Model untuk item media (gambar dalam slide)
 data class MediaItem(

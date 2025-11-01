@@ -12,7 +12,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
 
 
     <application
@@ -75,15 +81,7 @@
             android:theme="@style/Theme.AppCompat.Light.NoActionBar"
             android:exported="false" />
 
-        <service
-            android:name=".services.background.DeviceStatusPollingService"
-            android:enabled="true"
-            android:exported="false" />
-        <service
-            android:name=".services.background.FrameCaptureService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
+
         <activity
             android:name=".ScreenCaptureActivity"
             android:exported="true"
@@ -93,20 +91,38 @@
             android:launchMode="singleTask" />
 
         <service
+            android:name=".services.background.DeviceStatusPollingService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <service
+            android:name=".services.background.FrameCaptureService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <service
             android:name=".services.background.LocationUpdateService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="location" />
+
         <service
             android:name=".services.background.AppSyncService"
             android:enabled="true"
             android:exported="false"
-             />
+            android:foregroundServiceType="dataSync" />
 
         <service
             android:name=".services.FocusGuardUsageStatsService"
+            android:enabled="true"
             android:exported="false"
-          />
+            android:foregroundServiceType="specialUse|systemExempted">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="app_lock" />
+        </service>
 
 
         <service
@@ -133,6 +149,19 @@
             android:theme="@style/Theme.BillingApps" />
 
         <receiver
+            android:name=".services.MyDeviceAdminReceiver"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:exported="true">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin_policies" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
+
+        <receiver
             android:name=".receiver.StartServicesOnBootReceiver"
             android:enabled="true"
             android:exported="true">
@@ -140,7 +169,6 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
-
     </application>
 
     <queries>
@@ -149,6 +177,5 @@
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
     </queries>
-
 </manifest>
 

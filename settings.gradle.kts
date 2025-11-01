@@ -21,4 +21,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Billing Apps"
 include(":app")
- 
+include(":lib")

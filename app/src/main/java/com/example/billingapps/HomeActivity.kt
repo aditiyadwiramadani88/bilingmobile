@@ -1,12 +1,18 @@
 package com.example.billingapps
 
 import android.Manifest
+import android.app.AppOpsManager
+import android.app.admin.DevicePolicyManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
@@ -20,10 +26,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -35,13 +43,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.billingapps.api.PinLoginRequest
 import com.example.billingapps.api.RetrofitClient
 import com.example.billingapps.api.apps.AppInfoResponse
 import com.example.billingapps.api.apps.AppsRetrofitClient
@@ -52,46 +64,37 @@ import com.example.billingapps.services.background.FrameCaptureService
 import com.example.billingapps.services.background.LocationUpdateService
 import com.example.billingapps.ui.theme.BillingAppsTheme
 import kotlinx.coroutines.launch
-import com.example.billingapps.services.FocusGuardUsageStatsService
 import com.example.billingapps.services.background.AppSyncService
 import com.example.billingapps.services.background.DeviceStatusPollingService
+import retrofit2.HttpException
+import java.io.IOException
 
 class HomeActivity : ComponentActivity() {
 
-    // --- PERUBAHAN 1: Pindahkan launcher ke level Activity ---
     private val locationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        if (permissions.values.all { it }) {
+        val isGranted = permissions.values.all { it }
+        if (isGranted) {
             Toast.makeText(this, "Location permission granted.", Toast.LENGTH_SHORT).show()
-            startLocationUpdateService(this)
+            startLocationUpdateService(this) // Start service after getting permission
         } else {
-            Toast.makeText(this, "Location permission is required.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Location permission is required for full functionality.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            Toast.makeText(this, "Notification permission granted.", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "Notifications are recommended for service status.", Toast.LENGTH_LONG).show()
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        setupPusherService()
-        checkAndRequestLocationPermissions()
-
-        try {
-            val focusIntent = Intent(this, FocusGuardUsageStatsService::class.java)
-            ContextCompat.startForegroundService(this, focusIntent)
-
-            val pollingIntent = Intent(this, DeviceStatusPollingService::class.java)
-            ContextCompat.startForegroundService(this, pollingIntent)
-            val appSyncIntent = Intent(this, AppSyncService::class.java)
-            ContextCompat.startForegroundService(this, appSyncIntent)
-
-            Log.d("HomeActivity", "Service utama dijalankan.")
-        } catch (e: SecurityException) {
-
-            Log.d("HomeActivity", "Semua service utama dijalankan.")
-        } catch (e: Exception) {
-            Log.e("HomeActivity", "Gagal menjalankan service: ${e.message}")
-        }
 
         setContent {
             BillingAppsTheme {
@@ -103,56 +106,128 @@ class HomeActivity : ComponentActivity() {
                 }
             }
         }
+
+        Handler(Looper.getMainLooper()).postDelayed({
+            checkAndRequestNotificationPermission()
+            checkAndRequestLocationPermissions()
+
+            startUsageStatsService(this)
+            startDeviceStatusPollingService(this)
+            startAppSyncService(this)
+        }, 1200)
+    }
+
+    private fun checkAndRequestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                Log.d("HomeActivity", "Requesting Notification permission.")
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
     }
 
     private fun checkAndRequestLocationPermissions() {
-        val locationPermissions = arrayOf(
+        val requiredPermissions = arrayOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION
         )
-        val arePermissionsGranted = locationPermissions.all {
+        val arePermissionsGranted = requiredPermissions.all {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
 
         if (arePermissionsGranted) {
+            Log.d("HomeActivity", "Location permissions already granted.")
             startLocationUpdateService(this)
         } else {
-            locationPermissionLauncher.launch(locationPermissions)
+            Log.d("HomeActivity", "Requesting location permissions.")
+            locationPermissionLauncher.launch(requiredPermissions)
         }
     }
+}
 
-    private fun setupPusherService() {
-        val sharedPreferences = getSharedPreferences("BillingAppPrefs", MODE_PRIVATE)
-        val deviceId = sharedPreferences.getString("deviceId", null)
-        if (deviceId != null) {
-            with(sharedPreferences.edit()) {
-                putString("broadcastToken", MyApp.TOKEN)
-                apply()
+// --- Service Helper Functions ---
+
+private fun safeStartForegroundService(context: Context, intent: Intent) {
+    val serviceName = intent.component?.className ?: "Unknown FGS"
+    try {
+        Handler(Looper.getMainLooper()).postDelayed({
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                    Log.d("ServiceHelper", "Successfully started FGS: $serviceName")
+                } else {
+                    context.startService(intent)
+                    Log.d("ServiceHelper", "Successfully started pre-Oreo service: $serviceName")
+                }
+            } catch (e: SecurityException) {
+                Log.e("ServiceHelper", "SecurityException for $serviceName. Missing permission?", e)
+            } catch (e: IllegalStateException) {
+                Log.e("ServiceHelper", "IllegalStateException for $serviceName. App not in a valid state to start FGS.", e)
             }
-            Log.d("HomeActivity", "Broadcast token ensured in SharedPreferences.")
-        } else {
-            Log.w("HomeActivity", "Device ID not found. Services will not start.")
-        }
+            catch (e: Exception) {
+                Log.e("ServiceHelper", "Failed to start FGS '$serviceName': ${e.javaClass.simpleName}", e)
+            }
+        }, 300)
+    } catch (e: Exception) {
+        Log.e("ServiceHelper", "Outer catch failed to start FGS '$serviceName'", e)
     }
 }
 
-// --- Ambil semua aplikasi terinstall (user + system) ---
-private fun getInstalledApps(context: Context): List<AppInfo> {
-    val packageManager: PackageManager = context.packageManager
-    val appInfoList = mutableListOf<AppInfo>()
-
-    val installedApplications = packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
-    Log.d("GetInstalledApps", "Total installed apps: ${installedApplications.size}")
-
-    for (applicationInfo in installedApplications) {
-        if (applicationInfo.packageName == context.packageName) continue
-        val appName = packageManager.getApplicationLabel(applicationInfo).toString()
-        val packageName = applicationInfo.packageName
-        appInfoList.add(AppInfo(name = appName, packageName = packageName))
+private fun safeStartService(context: Context, intent: Intent) {
+    val serviceName = intent.component?.className ?: "Unknown Service"
+    try {
+        context.startService(intent)
+        Log.d("ServiceHelper", "Successfully started background service: $serviceName")
+    } catch (e: Exception) {
+        Log.e("ServiceHelper", "Failed to start background service '$serviceName': ${e.message}", e)
     }
-
-    return appInfoList.sortedBy { it.name.lowercase() }
 }
+
+// --- Service Initializers ---
+
+fun startLocationUpdateService(context: Context) {
+    if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        Log.w("ServiceInit", "Cannot start LocationUpdateService: permission denied.")
+        return
+    }
+    val serviceIntent = Intent(context, LocationUpdateService::class.java)
+    safeStartForegroundService(context, serviceIntent)
+}
+
+private fun startUsageStatsService(context: Context) {
+    val intent = Intent(context, FocusGuardUsageStatsService::class.java)
+    safeStartService(context, intent)
+}
+
+private fun startDeviceStatusPollingService(context: Context) {
+    val intent = Intent(context, DeviceStatusPollingService::class.java)
+    safeStartService(context, intent)
+}
+
+private fun startAppSyncService(context: Context) {
+    val intent = Intent(context, AppSyncService::class.java)
+    safeStartService(context, intent)
+}
+
+private fun startScreenCapture(context: Context) {
+    val intent = Intent(context, ScreenCaptureActivity::class.java).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    context.startActivity(intent)
+}
+
+private fun stopScreenCapture(context: Context) {
+    Log.d("HomeActivity", "Attempting to stop FrameCaptureService.")
+    val intent = Intent(context, FrameCaptureService::class.java).apply {
+        action = FrameCaptureService.ACTION_STOP_CAPTURE
+    }
+    safeStartService(context, intent)
+
+    val prefs = context.getSharedPreferences("BillingAppPrefs", Context.MODE_PRIVATE)
+    prefs.edit().putBoolean(ScreenCaptureActivity.PREF_KEY_IS_CAPTURE_RUNNING, false).apply()
+}
+
+// --- UI and Other Logic ---
 
 @Composable
 fun FocusGuardScreen() {
@@ -161,19 +236,22 @@ fun FocusGuardScreen() {
     val prefs = remember { context.getSharedPreferences("BillingAppPrefs", Context.MODE_PRIVATE) }
     val deviceId = remember { prefs.getString("deviceId", "Not Found") ?: "Not Found" }
 
-
     var isAccessibilityEnabled by remember { mutableStateOf(checkAccessibilityServiceEnabled(context)) }
     var hasUsageStats by remember { mutableStateOf(hasUsageStatsPermission(context)) }
+    var isIgnoringBatteryOptimizations by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
+    var hasOverlay by remember { mutableStateOf(hasOverlayPermission(context)) }
+    var hasDeviceAdmin by remember { mutableStateOf(checkDeviceAdminPermission(context)) }
     var blockedAppsCount by remember { mutableStateOf(0) }
     var whitelistedAppsCount by remember { mutableStateOf(0) }
     var isLocked by remember { mutableStateOf<Boolean?>(null) }
     var isLoadingLockStatus by remember { mutableStateOf(true) }
     var isSyncing by remember { mutableStateOf(false) }
-
-    // State untuk status screen capture
     var isCaptureRunning by remember {
         mutableStateOf(prefs.getBoolean(ScreenCaptureActivity.PREF_KEY_IS_CAPTURE_RUNNING, false))
     }
+    // State untuk mengontrol dialog konfirmasi logout
+    var showLogoutConfirmDialog by remember { mutableStateOf(false) }
+
 
     val reloadCountsFromStorage: () -> Unit = {
         val appsFromStorage = InternalStorageManager.getApps(context)
@@ -189,7 +267,6 @@ fun FocusGuardScreen() {
         }
     }
 
-    // --- PERUBAHAN 3: Hapus logika izin dari LaunchedEffect ---
     LaunchedEffect(Unit) {
         reloadCountsFromStorage()
         fetchLockStatus()
@@ -208,27 +285,17 @@ fun FocusGuardScreen() {
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
-
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 isAccessibilityEnabled = checkAccessibilityServiceEnabled(context)
                 hasUsageStats = hasUsageStatsPermission(context)
+                isIgnoringBatteryOptimizations = isIgnoringBatteryOptimizations(context)
+                hasOverlay = hasOverlayPermission(context)
+                hasDeviceAdmin = checkDeviceAdminPermission(context) // Refresh device admin status
                 reloadCountsFromStorage()
                 fetchLockStatus()
                 isCaptureRunning = prefs.getBoolean(ScreenCaptureActivity.PREF_KEY_IS_CAPTURE_RUNNING, false)
-
-                if (hasUsageStats && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-                    try {
-                        val serviceIntent = Intent(context, FocusGuardUsageStatsService::class.java)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                            context.startForegroundService(serviceIntent)
-                        else
-                            context.startService(serviceIntent)
-                    } catch (e: Exception) {
-                        Log.e("FocusGuard", "Failed to start service: ${e.message}")
-                    }
-                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -236,7 +303,6 @@ fun FocusGuardScreen() {
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
-
 
     Box(
         modifier = Modifier
@@ -247,7 +313,7 @@ fun FocusGuardScreen() {
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 100.dp) // Tambah padding bawah
+                .padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 100.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -256,7 +322,6 @@ fun FocusGuardScreen() {
             ) {
                 Column {
                     Text(text = "TimeBill", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color.Black)
-                    // --- PENAMBAHAN: MENAMPILKAN DEVICE ID ---
                     Text(text = "Device ID: $deviceId", fontSize = 12.sp, color = Color.Gray)
                     Text(text = "Mode: active", fontSize = 16.sp, color = Color.Gray)
                 }
@@ -267,13 +332,9 @@ fun FocusGuardScreen() {
                             val success = syncInstalledApps(context)
                             if (success) {
                                 reloadCountsFromStorage()
-                                Toast
-                                    .makeText(context, "Sync successful!", Toast.LENGTH_SHORT)
-                                    .show()
+                                Toast.makeText(context, "Sync successful!", Toast.LENGTH_SHORT).show()
                             } else {
-                                Toast
-                                    .makeText(context, "Sync failed. Check logs.", Toast.LENGTH_LONG)
-                                    .show()
+                                Toast.makeText(context, "Sync failed. Check logs.", Toast.LENGTH_LONG).show()
                             }
                             isSyncing = false
                         }
@@ -307,6 +368,21 @@ fun FocusGuardScreen() {
                 onActivateClick = { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }
             )
             Spacer(modifier = Modifier.height(16.dp))
+            BatteryOptimizationStatus(
+                isIgnoring = isIgnoringBatteryOptimizations,
+                onActivateClick = { requestIgnoreBatteryOptimizations(context) }
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            OverlayPermissionStatus(
+                isEnabled = hasOverlay,
+                onActivateClick = { requestOverlayPermission(context) }
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            DeviceAdminStatus(
+                isEnabled = hasDeviceAdmin,
+                onActivateClick = { requestDeviceAdminPermission(context) }
+            )
+            Spacer(modifier = Modifier.height(16.dp))
             OptionCard(
                 modifier = Modifier.clickable { appSelectionLauncher.launch(Intent(context, SelectBlockAppActivity::class.java)) },
                 icon = Icons.Default.CheckCircle,
@@ -322,13 +398,11 @@ fun FocusGuardScreen() {
                 subtitle = "Pilih aplikasi yang diizinkan",
                 iconColor = Color(0xFF00875A)
             )
-            // --- KARTU SCREEN CAPTURE DINAMIS ---
             Spacer(modifier = Modifier.height(16.dp))
             if (isCaptureRunning) {
                 OptionCard(
                     modifier = Modifier.clickable {
                         stopScreenCapture(context)
-                        // Update UI langsung
                         isCaptureRunning = false
                     },
                     icon = Icons.Filled.Close,
@@ -345,21 +419,11 @@ fun FocusGuardScreen() {
                     iconColor = Color(0xFFE74C3C)
                 )
             }
-            // --- PEMINDAHAN TOMBOL LOGOUT ---
             Spacer(modifier = Modifier.height(16.dp))
             OutlinedButton(
                 onClick = {
-                    val sharedPreferences = context.getSharedPreferences("BillingAppPrefs", Context.MODE_PRIVATE)
-                    with(sharedPreferences.edit()) {
-                        clear() // Menghapus semua data, termasuk deviceId
-                        apply()
-                    }
-
-                    // Arahkan kembali ke PinActivity dan bersihkan stack
-                    val intent = Intent(context, PinActivity::class.java).apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                    }
-                    context.startActivity(intent)
+                    // Tampilkan dialog konfirmasi, bukan langsung logout
+                    showLogoutConfirmDialog = true
                 },
                 shape = RoundedCornerShape(12.dp),
                 border = BorderStroke(1.dp, Color.Red),
@@ -368,7 +432,6 @@ fun FocusGuardScreen() {
                 Text("Logout", color = Color.Red)
             }
         }
-        // --- Lock Status Display sebagai elemen tetap di bawah ---
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -378,43 +441,153 @@ fun FocusGuardScreen() {
         ) {
             LockStatusDisplay(isLocked = isLocked, isLoading = isLoadingLockStatus)
         }
-    }
-}
 
-public fun startLocationUpdateService(context: Context) {
-    val serviceIntent = Intent(context, LocationUpdateService::class.java)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        context.startForegroundService(serviceIntent)
-    } else {
-        context.startService(serviceIntent)
-    }
-    Log.d("HomeActivity", "Attempting to start LocationUpdateService.")
-}
-
-private fun startScreenCapture(context: Context) {
-    val intent = Intent(context, ScreenCaptureActivity::class.java).apply {
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    }
-    context.startActivity(intent)
-}
-
-// --- FUNGSI BARU UNTUK MENGHENTIKAN SERVICE ---
-private fun stopScreenCapture(context: Context) {
-    Log.d("HomeActivity", "Attempting to stop FrameCaptureService.")
-    val intent = Intent(context, FrameCaptureService::class.java).apply {
-        action = FrameCaptureService.ACTION_STOP_CAPTURE
-    }
-    context.startService(intent) // Cukup startService, service akan menangani stop-nya sendiri
-
-    // Update status di SharedPreferences
-    val prefs = context.getSharedPreferences("BillingAppPrefs", Context.MODE_PRIVATE)
-    with(prefs.edit()) {
-        putBoolean(ScreenCaptureActivity.PREF_KEY_IS_CAPTURE_RUNNING, false)
-        apply()
+        // Panggil dialog jika state-nya true
+        if (showLogoutConfirmDialog) {
+            LogoutConfirmationDialog(
+                deviceId = deviceId,
+                onDismiss = { showLogoutConfirmDialog = false },
+                onLogoutSuccess = {
+                    showLogoutConfirmDialog = false // Tutup dialog
+                    // Jalankan logika logout yang sesungguhnya
+                    val sharedPreferences = context.getSharedPreferences("BillingAppPrefs", Context.MODE_PRIVATE)
+                    with(sharedPreferences.edit()) {
+                        clear()
+                        apply()
+                    }
+                    val intent = Intent(context, PinActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                    }
+                    context.startActivity(intent)
+                    (context as? ComponentActivity)?.finish()
+                }
+            )
+        }
     }
 }
 
 
+// --- Composable UI Components ---
+
+/**
+ * Composable baru untuk menampilkan dialog konfirmasi logout dengan PIN.
+ */
+@Composable
+fun LogoutConfirmationDialog(
+    deviceId: String,
+    onDismiss: () -> Unit,
+    onLogoutSuccess: () -> Unit
+) {
+    var pin by remember { mutableStateOf("") }
+    var isLoading by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Konfirmasi Logout",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Masukkan PIN Anda untuk melanjutkan.",
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedTextField(
+                    value = pin,
+                    onValueChange = { if (it.length <= 6 && it.all { char -> char.isDigit() }) pin = it },
+                    label = { Text("PIN") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    isError = errorMessage != null,
+                    textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center, fontSize = 20.sp)
+                )
+
+                if (errorMessage != null) {
+                    Text(
+                        text = errorMessage!!,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Batal")
+                    }
+                    Button(
+                        onClick = {
+                            if (pin.isNotBlank()) {
+                                coroutineScope.launch {
+                                    isLoading = true
+                                    errorMessage = null
+                                    try {
+                                        val request = PinLoginRequest(pin = pin)
+                                        val response = RetrofitClient.instance.loginWithPin(deviceId, request)
+
+                                        if (response.isSuccessful && response.body()?.success == true) {
+                                            onLogoutSuccess()
+                                        } else {
+                                            errorMessage = "PIN yang Anda masukkan salah."
+                                        }
+                                    } catch (e: IOException) {
+                                        errorMessage = "Gagal terhubung ke server."
+                                    } catch (e: HttpException) {
+                                        errorMessage = "PIN yang Anda masukkan salah."
+                                    } catch (e: Exception) {
+                                        errorMessage = "Terjadi kesalahan."
+                                    } finally {
+                                        isLoading = false
+                                    }
+                                }
+                            } else {
+                                errorMessage = "PIN tidak boleh kosong."
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        enabled = !isLoading
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text("Konfirmasi")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --- Utility Functions ---
 
 private suspend fun getDeviceLockStatus(context: Context): Boolean? {
     val sharedPreferences: SharedPreferences = context.getSharedPreferences("BillingAppPrefs", Context.MODE_PRIVATE)
@@ -439,6 +612,38 @@ private suspend fun getDeviceLockStatus(context: Context): Boolean? {
     }
 }
 
+private fun getInstalledApps(context: Context): List<AppInfo> {
+    val packageManager: PackageManager = context.packageManager
+    val appInfoList = mutableListOf<AppInfo>()
+    val installedApplications = packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
+
+    for (applicationInfo in installedApplications) {
+        if (applicationInfo.packageName == context.packageName) continue
+        val appName = packageManager.getApplicationLabel(applicationInfo).toString()
+        val packageName = applicationInfo.packageName
+        appInfoList.add(AppInfo(name = appName, packageName = packageName))
+    }
+    return appInfoList.sortedBy { it.name.lowercase() }
+}
+
+private fun getInstalledLauncherApps(context: Context): List<AppInfo> {
+    val packageManager = context.packageManager
+    val intent = Intent(Intent.ACTION_MAIN, null)
+    intent.addCategory(Intent.CATEGORY_LAUNCHER)
+
+    val resolvedApps = packageManager.queryIntentActivities(intent, 0)
+    val appInfoList = mutableListOf<AppInfo>()
+
+    for (resolveInfo in resolvedApps) {
+        val appName = resolveInfo.loadLabel(packageManager).toString()
+        val packageName = resolveInfo.activityInfo.packageName
+        appInfoList.add(AppInfo(name = appName, packageName = packageName))
+    }
+
+    return appInfoList.sortedBy { it.name.lowercase() }
+}
+
+
 suspend fun syncInstalledApps(context: Context): Boolean {
     val sharedPreferences: SharedPreferences = context.getSharedPreferences("BillingAppPrefs", Context.MODE_PRIVATE)
     val deviceId = sharedPreferences.getString("deviceId", null)
@@ -448,22 +653,14 @@ suspend fun syncInstalledApps(context: Context): Boolean {
     }
 
     return try {
-        val installedApps = getInstalledApps(context)
+        val installedApps = getInstalledLauncherApps(context)
         val cachedApps = InternalStorageManager.getApps(context)
         val cachedPackages = cachedApps.map { it.packageName }.toSet()
 
         val newApps = installedApps.filterNot { cachedPackages.contains(it.packageName) }
 
         if (newApps.isNotEmpty()) {
-            Log.d("SyncInstalledApps", "Found ${newApps.size} new apps to sync.")
-            val bulkRequestItems = newApps.map { appInfo ->
-                BulkInsertAppItem(
-                    appName = appInfo.name,
-                    packageName = appInfo.packageName,
-                    statusBlock = "non_aktif",
-                    isWhitelist = false
-                )
-            }
+            val bulkRequestItems = newApps.map { BulkInsertAppItem(it.name, it.packageName, "non_aktif", false) }
             val bulkRequest = BulkInsertAppsRequest(apps = bulkRequestItems)
             val bulkResponse = AppsRetrofitClient.instance.bulkInsertApps(deviceId, bulkRequest)
             if (!bulkResponse.isSuccessful) {
@@ -481,11 +678,108 @@ suspend fun syncInstalledApps(context: Context): Boolean {
         val allServerApps: List<AppInfoResponse> = allAppsResponse.body() ?: emptyList()
         InternalStorageManager.saveApps(context, allServerApps)
         Log.d("SyncInstalledApps", "Synced ${allServerApps.size} apps to storage.")
-
         true
     } catch (e: Exception) {
         Log.e("SyncInstalledApps", "Unexpected exception: ${e.message}", e)
         false
+    }
+}
+
+fun checkAccessibilityServiceEnabled(context: Context): Boolean {
+    val service = "${context.packageName}/${FocusGuardAccessibilityService::class.java.canonicalName}"
+    return Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)?.contains(service) ?: false
+}
+
+fun hasUsageStatsPermission(context: Context): Boolean {
+    return try {
+        val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            appOps.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), context.packageName)
+        } else {
+            @Suppress("DEPRECATION")
+            appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), context.packageName)
+        }
+        mode == AppOpsManager.MODE_ALLOWED
+    } catch (e: Exception) {
+        Log.e("PermissionCheck", "Failed to check usage stats permission", e)
+        false
+    }
+}
+
+private fun isIgnoringBatteryOptimizations(context: Context): Boolean {
+    val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+    return powerManager.isIgnoringBatteryOptimizations(context.packageName)
+}
+
+private fun requestIgnoreBatteryOptimizations(context: Context) {
+    val intent = Intent().apply {
+        action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+        data = Uri.parse("package:${context.packageName}")
+    }
+    context.startActivity(intent)
+}
+
+fun hasOverlayPermission(context: Context): Boolean {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        Settings.canDrawOverlays(context)
+    } else {
+        true // Granted at install time on older versions
+    }
+}
+
+private fun requestOverlayPermission(context: Context) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        val intent = Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:${context.packageName}")
+        )
+        context.startActivity(intent)
+    }
+}
+
+fun checkDeviceAdminPermission(context: Context): Boolean {
+    val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+    val compName = MyDeviceAdminReceiver.getComponentName(context)
+    return dpm.isAdminActive(compName)
+}
+
+private fun requestDeviceAdminPermission(context: Context) {
+    val compName = MyDeviceAdminReceiver.getComponentName(context)
+    val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+        putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, compName)
+        putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Aplikasi ini memerlukan izin Admin Perangkat untuk memastikan fitur pemblokiran aplikasi berfungsi dengan benar dan mencegah penghapusan paksa.")
+    }
+    context.startActivity(intent)
+}
+
+@Composable
+fun BatteryOptimizationStatus(isIgnoring: Boolean, onActivateClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = if (isIgnoring) Color(0xFFE6F9F0) else Color(0xFFFFF4E5))
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = "Status Optimasi Baterai", fontWeight = FontWeight.Bold, color = Color.Black)
+                Text(
+                    text = if (isIgnoring) "Diabaikan (Direkomendasikan)" else "Aktif (Tidak Direkomendasikan)",
+                    color = if (isIgnoring) Color(0xFF00875A) else Color(0xFFE67E22)
+                )
+            }
+            if (!isIgnoring) {
+                Button(
+                    onClick = onActivateClick,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6A5AE0))
+                ) {
+                    Text("Nonaktifkan")
+                }
+            }
+        }
     }
 }
 
@@ -498,9 +792,7 @@ fun LockStatusDisplay(isLocked: Boolean?, isLoading: Boolean) {
         border = BorderStroke(1.dp, Color(0xFFEDEDF4))
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -522,13 +814,7 @@ fun LockStatusDisplay(isLocked: Boolean?, isLoading: Boolean) {
                     false -> Color.Red
                     null -> Color.Gray
                 }
-                Text(
-                    text = statusText,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = statusColor,
-                    textAlign = TextAlign.End
-                )
+                Text(text = statusText, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = statusColor, textAlign = TextAlign.End)
             }
         }
     }
@@ -592,13 +878,33 @@ fun UsageStatsStatus(isEnabled: Boolean, onActivateClick: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
+                Text(text = "Status Akses Data Penggunaan", fontWeight = FontWeight.Bold, color = Color.Black)
+                Text(text = if (isEnabled) "Active" else "Tidak Active", color = if (isEnabled) Color(0xFF00875A) else Color(0xFFE67E22))
+            }
+            if (!isEnabled) {
+                Button(onClick = onActivateClick, shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6A5AE0))) {
+                    Text("Aktifkan")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun OverlayPermissionStatus(isEnabled: Boolean, onActivateClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = if (isEnabled) Color(0xFFE6F9F0) else Color(0xFFFFF4E5))
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = "Status Izin Tampilan di Atas", fontWeight = FontWeight.Bold, color = Color.Black)
                 Text(
-                    text = "Status Akses Data Penggunaan",
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Black
-                )
-                Text(
-                    text = if (isEnabled) "Active" else "Tidak Active",
+                    text = if (isEnabled) "Aktif" else "Tidak Aktif (Dibutuhkan)",
                     color = if (isEnabled) Color(0xFF00875A) else Color(0xFFE67E22)
                 )
             }
@@ -615,26 +921,33 @@ fun UsageStatsStatus(isEnabled: Boolean, onActivateClick: () -> Unit) {
     }
 }
 
-fun checkAccessibilityServiceEnabled(context: Context): Boolean {
-    val service = "${context.packageName}/${FocusGuardAccessibilityService::class.java.canonicalName}"
-    val settingValue = Settings.Secure.getString(
-        context.contentResolver,
-        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-    )
-    return settingValue?.contains(service) ?: false
-}
-
-fun hasUsageStatsPermission(context: Context): Boolean {
-    try {
-        val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager
-        val mode = appOps.checkOpNoThrow(
-            "android:get_usage_stats",
-            android.os.Process.myUid(),
-            context.packageName
-        )
-        return mode == android.app.AppOpsManager.MODE_ALLOWED
-    } catch (e: Exception) {
-        e.printStackTrace()
+@Composable
+fun DeviceAdminStatus(isEnabled: Boolean, onActivateClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = if (isEnabled) Color(0xFFE6F9F0) else Color(0xFFFFF4E5))
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = "Status Admin Perangkat", fontWeight = FontWeight.Bold, color = Color.Black)
+                Text(
+                    text = if (isEnabled) "Aktif" else "Tidak Aktif (Dibutuhkan)",
+                    color = if (isEnabled) Color(0xFF00875A) else Color(0xFFE67E22)
+                )
+            }
+            if (!isEnabled) {
+                Button(
+                    onClick = onActivateClick,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6A5AE0))
+                ) {
+                    Text("Aktifkan")
+                }
+            }
+        }
     }
-    return false
 }

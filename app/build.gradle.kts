@@ -67,6 +67,8 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.3.0")
     implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("androidx.activity:activity-ktx:1.11.0")
+    implementation("io.socket:socket.io-client:2.1.0")
+    implementation("org.json:json:20240303")
     implementation(libs.bundles.media3)
 
     // --- Tambahkan dependensi BARU di sini ---

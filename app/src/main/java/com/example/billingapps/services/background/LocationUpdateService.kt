@@ -36,7 +36,6 @@ class LocationUpdateService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO + job)
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var locationRunnable: Runnable
-
     private lateinit var fusedLocationClient: FusedLocationProviderClient
 
     companion object {

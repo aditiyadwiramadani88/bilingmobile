@@ -125,6 +125,24 @@ private fun getInstalledApps(context: Context): List<AppInfo> {
     return appInfoList.sortedBy { it.name.lowercase() }
 }
 
+private fun getInstalledLauncherApps(context: Context): List<AppInfo> {
+    val packageManager = context.packageManager
+    val intent = Intent(Intent.ACTION_MAIN, null)
+    intent.addCategory(Intent.CATEGORY_LAUNCHER)
+
+    val resolvedApps = packageManager.queryIntentActivities(intent, 0)
+    val appInfoList = mutableListOf<AppInfo>()
+
+    for (resolveInfo in resolvedApps) {
+        val appName = resolveInfo.loadLabel(packageManager).toString()
+        val packageName = resolveInfo.activityInfo.packageName
+        appInfoList.add(AppInfo(name = appName, packageName = packageName))
+    }
+
+    return appInfoList.sortedBy { it.name.lowercase() }
+}
+
+
 private suspend fun syncInstalledApps(context: Context): Boolean {
     val sharedPreferences: SharedPreferences = context.getSharedPreferences("BillingAppPrefs", Context.MODE_PRIVATE)
     val deviceId = sharedPreferences.getString("deviceId", null)
@@ -134,10 +152,9 @@ private suspend fun syncInstalledApps(context: Context): Boolean {
     }
 
     return try {
-        val installedApps = getInstalledApps(context)
+        val installedApps = getInstalledLauncherApps(context)
         val cachedApps = InternalStorageManager.getApps(context)
         val cachedPackages = cachedApps.map { it.packageName }.toSet()
-
         val newApps = installedApps.filterNot { cachedPackages.contains(it.packageName) }
 
         if (newApps.isNotEmpty()) {
@@ -173,5 +190,7 @@ private suspend fun syncInstalledApps(context: Context): Boolean {
         Log.e("SyncInstalledApps", "Unexpected exception: ${e.message}", e)
         false
     }
+
+
 }
 
